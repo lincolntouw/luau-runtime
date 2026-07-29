@@ -68,6 +68,37 @@ void Scheduler::run(lua_State* L) {
     }
 }
 
+bool Scheduler::cancel(lua_State* L, lua_State* target) {       
+    auto it = std::find_if(readyQueue.begin(), readyQueue.end(),
+        [target](const std::tuple<lua_State*, int, int>& entry) {
+            return std::get<0>(entry) == target;
+        });
+
+    if (it != readyQueue.end()) {
+        int ref = std::get<1>(*it);   
+        lua_unref(L, ref);   
+        readyQueue.erase(it);      
+        return true;    
+    }
+            
+    std::vector<DelayedThread> remaining;
+    bool found = false;
+
+    while (!delayHeap.empty()) {
+        DelayedThread d = delayHeap.top();  
+        delayHeap.pop();    
+
+        if (!found && d.thread == target) {
+            lua_unref(L, d.threadRef);
+            found = true;
+            continue;                   
+        }
+        remaining.push_back(d);
+    }
+    for (const DelayedThread& d : remaining) { delayHeap.push(d); }
+    return found;
+}
+
 // -- HELPERS -- //
 
 // Pulls a function & its args off L's stack (indices 1..N), moves them onto a brand-new coroutine, and returns that coroutine ready to be resumed.
@@ -91,14 +122,14 @@ static int lua_task_spawn(lua_State* L) {
     lua_State* thread = makeThreadFromArgs(L, ref, nargs);
     // spawn runs immediately, synchronously, exactly once; is not queued again
     Scheduler::instance().resumeThread(L, thread, ref, nargs);
-    return 0;
+    return 1;
 }
 
 static int lua_task_defer(lua_State* L) {
     int ref, nargs;
     lua_State* thread = makeThreadFromArgs(L, ref, nargs);
     Scheduler::instance().deferNow(L, thread, ref, nargs);
-    return 0;
+    return 1;
 }
 
 static int lua_task_delay(lua_State* L) {
@@ -107,6 +138,13 @@ static int lua_task_delay(lua_State* L) {
     int ref, nargs;
     lua_State* thread = makeThreadFromArgs(L, ref, nargs);
     Scheduler::instance().scheduleAfter(L, seconds, thread, ref, nargs);
+    return 1;
+}
+
+static int lua_task_cancel(lua_State* L) {   
+    luaL_checktype(L, 1, LUA_TTHREAD);
+    lua_State* target = lua_tothread(L, 1);
+    Scheduler::instance().cancel(L, target);
     return 0;
 }
 
@@ -134,6 +172,9 @@ void registerTaskLibrary(lua_State* L) {
     lua_pushcfunction(L, lua_task_delay, "delay");
     lua_setfield(L, -2, "delay");
 
+    lua_pushcfunction(L, lua_task_cancel, "cancel");
+    lua_setfield(L, -2, "cancel");
+       
     lua_pushcfunction(L, lua_task_wait, "wait");
     lua_setfield(L, -2, "wait");
 
