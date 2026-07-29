@@ -33,6 +33,7 @@ public:
     void run(lua_State* L);
 
     double now() const;
+    bool cancel(lua_State* L, lua_State* target);
 
     /* Resumes one thread and handles its bookkeeping(unref on completion / error).
     Public because task.spawn needs to run its thread synchronously, once,
